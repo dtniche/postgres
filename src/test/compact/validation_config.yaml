@@ -1,0 +1,43 @@
+
+# Oracle兼容性视图验证配置文件
+
+# 要验证的视图列表
+views:
+  - dba_tables
+  - all_tables
+  - user_tables
+  - dba_all_tables
+  - all_all_tables
+  - user_all_tables
+
+# PostgreSQL数据库连接配置
+postgresql:
+  host: localhost
+  port: 5432
+  database: postgres
+  user: dn
+  password: ""
+
+# Oracle数据库连接配置（可选）
+oracle:
+  host: 172.23.160.1
+  port: 1521
+  service_name: XEPDB1
+  user: sys
+  password: "111111"
+
+# 验证选项
+test_mode: false
+verbose: true
+
+# 输出配置
+output_file: "validation_report.txt"
+json_file: "validation_results.json"
+
+# 回归验证配置
+regression: false
+baseline_file: null
+save_baseline: null
+min_score: 90.0
+max_differences: 5
+output_dir: "validation_results"
