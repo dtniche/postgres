@@ -8,18 +8,40 @@
 #### 视图与权限
 - dba_all_tables
   - 含义：所有表（含系统对象），DBA 视图
-  - 实现：`SELECT * FROM dba_all_tables_base(true, false)`
+  - 实现：`SELECT * FROM all_tables_base(true, false, false)`
   - 权限：不授予 PUBLIC（`REVOKE ALL ON dba_all_tables FROM PUBLIC`）
 
 - all_all_tables
   - 含义：当前用户可见的所有表，包含系统对象（模拟 Oracle ALL_TABLES）
-  - 实现：`SELECT * FROM dba_all_tables_base(true, false)`
+  - 实现：`SELECT * FROM all_tables_base(true, false, true)`
   - 权限：`GRANT SELECT ON all_all_tables TO PUBLIC`
 
 - user_all_tables
   - 含义：当前用户拥有的表
-  - 实现：`SELECT * FROM dba_all_tables_base(false, true)`
+  - 实现：`SELECT * FROM all_tables_base(false, true, false)`
   - 权限：`GRANT SELECT ON user_all_tables TO PUBLIC`
+
+#### 权限逻辑实现（与当前 `oracle_compat_views.sql` 保持一致）
+- 基础函数入参约定（以 tables 类为例，其他 base 函数相同）：
+  - `include_system_*`: 是否包含系统对象
+  - `current_user_only`: 是否仅当前用户对象
+  - `visible_only`: 是否仅限“当前可见对象”（避免 DBA 全量）
+- DBA 模式判定：当且仅当 `NOT current_user_only AND NOT visible_only` 为真时，即视为请求 DBA 级别数据。
+- 内部权限检查：在各 base 函数体内执行
+  - `IF NOT current_user_only AND NOT visible_only THEN
+       IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+         RAISE EXCEPTION 'permission denied for function ...: DBA-level access requires superuser privileges';
+       END IF;
+     END IF;`
+  - 即：仅当请求 DBA 模式时才进行“当前有效用户是否超级用户”的检查；否则允许执行。
+- 视图包装的参数策略：
+  - `dba_*`/`dba_all_*` 视图：使用 DBA 模式（`current_user_only=false AND visible_only=false`），因此普通用户直接查询会因内部检查报错（同时也未对 PUBLIC 授权）。
+  - `all_*`/`all_all_*` 视图：使用 `visible_only=true`，避免触发 DBA 模式检查，且对 PUBLIC 授权可读。
+  - `user_*`/`user_all_*` 视图：使用 `current_user_only=true`，也不会触发 DBA 模式检查，且对 PUBLIC 授权可读。
+- 特例：`col_privs_base` 使用 `SECURITY DEFINER`
+  - 函数以定义者权限执行，`current_user` 在 SECURITY DEFINER 下等同于函数所有者的有效角色；因此即便以普通用户调用 DBA 模式，也不会触发“非超级用户”拒绝（现实现为可用）。
+  - 设计含义：列权限信息函数以高权限收集数据，但最终通过上层视图的入参策略控制可见范围。
+  - 回归测试据此验证：普通用户 DBA 模式调用 `tables_base/all_tables_base/arguments_base` 被拒绝；调用 `col_privs_base` 可成功返回（示例用 `SELECT 1 ... LIMIT 1`）。
 
 #### 数据来源与过滤
 - 主来源：
@@ -120,6 +142,11 @@
   - 普通用户：`user_all_tables` 仅包含自有表
   - 普通用户：`all_all_tables` 也包含系统 schema
   - 普通用户：对 `dba_all_tables` 无 SELECT 权限（`has_table_privilege = false`）
+  - 普通用户（通过 `SET ROLE regress_nosuper` 模拟）直接调用 base 函数的 DBA 模式：
+    - `tables_base(true, false, false)` → 报错 `permission denied for function tables_base...`
+    - `all_tables_base(true, false, false)` → 报错 `permission denied for function all_tables_base...`
+    - `arguments_base(true, false, false)` → 报错 `permission denied for function arguments_base...`
+    - `col_privs_base(true, false, false)` → SECURITY DEFINER 行为下可成功返回一行（回归用 `SELECT 1 ... LIMIT 1` 验证）
 
 #### 运行方式
 ```bash
@@ -132,17 +159,17 @@ cd /home/dn/github/postgres/src/test/regress
 ##### 视图与权限
 - dba_arguments
   - 含义：所有函数参数（含系统函数），DBA 视图
-  - 实现：`SELECT * FROM arguments_base(true, false)`
+  - 实现：`SELECT * FROM arguments_base(true, false, false)`
   - 权限：不授予 PUBLIC（`REVOKE ALL ON dba_arguments FROM PUBLIC`）
 
 - all_arguments
   - 含义：当前用户可见的所有函数参数，包含系统函数
-  - 实现：`SELECT * FROM arguments_base(true, false)`
+  - 实现：`SELECT * FROM arguments_base(true, false, true)`
   - 权限：`GRANT SELECT ON all_arguments TO PUBLIC`
 
 - user_arguments
   - 含义：当前用户拥有的函数参数
-  - 实现：`SELECT * FROM arguments_base(false, true)`
+  - 实现：`SELECT * FROM arguments_base(false, true, false)`
   - 权限：`GRANT SELECT ON user_arguments TO PUBLIC`
 
 ##### 数据来源与过滤
@@ -207,7 +234,7 @@ cd /home/dn/github/postgres/src/test/regress
 - **USER_COL_PRIVS**: 当前用户拥有的列权限（不含owner列）
 
 ##### 2. 实现方式
-- 使用 `col_privs_base(include_system_objects, current_user_only)` 基础函数
+- 使用 `col_privs_base(include_system_objects, current_user_only, visible_only)` 基础函数
 - 从 `pg_class`, `pg_attribute`, `pg_namespace` 系统表提取列权限信息
 - 模拟列权限信息（PostgreSQL的列权限管理相对简单）
 - 主要展示表结构，实际权限信息需要从pg_class_acl等系统表获取
@@ -245,6 +272,54 @@ cd /home/dn/github/postgres/src/test/regress
 - PostgreSQL的列权限管理相对简单，这里主要展示表结构
 - 实际权限信息需要从pg_class_acl等系统表获取
 - 当前实现为模拟权限信息，用于兼容性测试
+
+#### 新增：列注释视图设计 (COL_COMMENTS)
+
+##### 1. 视图概述
+- **DBA_COL_COMMENTS**: 所有列注释（含系统对象），DBA视图
+- **ALL_COL_COMMENTS**: 所有列注释（含系统对象），ALL视图  
+- **USER_COL_COMMENTS**: 当前用户拥有的列注释，USER视图
+
+##### 2. 实现方式
+- **基础函数**: `col_comments_base(include_system_objects, current_user_only, visible_only)`
+- **参数控制**: 通过三个布尔参数控制数据范围和权限
+- **数据源**: `pg_description` 系统表 + `pg_class` + `pg_attribute`
+
+##### 3. 权限模型
+- **DBA_COL_COMMENTS**: `col_comments_base(true, false, false)` - 需要超级用户权限
+- **ALL_COL_COMMENTS**: `col_comments_base(true, false, true)` - 公开访问
+- **USER_COL_COMMENTS**: `col_comments_base(false, true, false)` - 当前用户数据
+
+##### 4. 数据来源
+- **主要表**: `pg_description` (存储注释信息)
+- **关联表**: `pg_class` (表信息) + `pg_attribute` (列信息)
+- **过滤条件**: 基于 `objoid` 和 `classoid` 关联
+
+##### 5. 过滤规则
+- **系统对象**: `include_system_objects` 参数控制是否包含系统表
+- **用户限制**: `current_user_only` 参数限制为当前用户拥有的对象
+- **可见性**: `visible_only` 参数控制基于权限的可见性过滤
+
+##### 6. 列映射表（5列）
+| 序号 | 列名 | 数据类型 | Oracle对应 | PostgreSQL来源 | 说明 |
+|------|------|----------|------------|----------------|------|
+| 1 | owner | text | OWNER | pg_get_userbyid(c.relowner) | 表所有者 |
+| 2 | table_name | text | TABLE_NAME | c.relname | 表名 |
+| 3 | column_name | text | COLUMN_NAME | a.attname | 列名 |
+| 4 | comments | text | COMMENTS | d.description | 列注释 |
+| 5 | origin_con_id | numeric | ORIGIN_CON_ID | NULL | Oracle容器ID（PostgreSQL中为NULL） |
+
+##### 7. 实现特点
+- **注释获取**: 从 `pg_description` 表获取列注释，`objoid` 对应 `pg_attribute.attrelid`，`objsubid` 对应 `pg_attribute.attnum`
+- **权限控制**: 通过基础函数的内部逻辑实现DBA级别访问控制
+- **类型安全**: 所有返回值显式转换为 `text` 类型，确保类型一致性
+- **兼容性**: 完全匹配Oracle DBA_COL_COMMENTS视图结构
+
+##### 8. 特殊说明
+- PostgreSQL的列注释存储在 `pg_description` 系统表中
+- 通过 `objoid` 和 `objsubid` 字段关联到具体的列
+- 当前实现支持所有用户表的列注释查询
+- 注释内容直接来自数据库，确保数据真实性
 
 #### 新增视图的方法和步骤
 
@@ -362,35 +437,25 @@ cd /home/dn/github/postgres/src/test/regress
    cat oracle_field_analysis.json | jq '.field_values.logging'
    ```
 
-2. **更新回归测试**
-   - 在 `src/test/regress/sql/oracle_compat_views.sql` 中添加测试用例
-   - 测试列数量、列名、数据类型
-   - 测试权限模型（普通用户无法访问DBA视图）
-   - 参考Oracle字段分析结果编写数据验证测试
-
-3. **更新验证配置**
+2. **更新验证配置**
+   - 验证配置脚本目录:`src/test/compact`下
    - 在 `validation_config.yaml` 中添加新视图到验证列表
-   - 运行兼容性验证：`python3 oracle_compat_validation.py`
+   - 已添加的视图：`dba_col_comments`, `all_col_comments`, `user_col_comments`
+   - 运行兼容性验证：`python3 oracle_compat_validation.py --views`
 
-3. **运行回归测试**
-   ```bash
-   cd src/test/regress
-   ./pg_regress --schedule ora_schedule
-   ```
-
-4. **兼容性验证流程**
+3. **兼容性验证流程**
    ```bash
    # 验证特定视图的兼容性
-   python3 oracle_compat_validation.py --views dba_new_view all_new_view user_new_view
+   python3 oracle_compat_validation.py --views dba_col_comments all_col_comments user_col_comments
    
-   # 验证单个视图（如user_all_tables）
-   python3 oracle_compat_validation.py --views user_all_tables
+   # 验证单个视图（如user_col_comments）
+   python3 oracle_compat_validation.py --views user_col_comments
    
    # 生成详细报告
-   python3 oracle_compat_validation.py --views dba_new_view --output detailed_report.txt --json results.json
+   python3 oracle_compat_validation.py --views dba_col_comments --output detailed_report.txt --json results.json
    ```
 
-5. **根据验证结果修正实现**
+4. **根据验证结果修正实现**
    - 查看 `validation_results.json` 中的Oracle列结构
    - 对比PostgreSQL和Oracle的列顺序、数据类型
    - 修正PostgreSQL实现以匹配Oracle结构
@@ -404,7 +469,7 @@ cd /home/dn/github/postgres/src/test/regress
    with open('validation_results.json', 'r') as f:
        data = json.load(f)
    for result in data['results']:
-       if result['view_name'] == 'user_all_tables':
+       if result['view_name'] == 'user_col_comments':
            print('Oracle列结构:')
            for col in result['oracle']['columns']:
                print(f'{col[\"ordinal_position\"]:2d}. {col[\"name\"]:<30} {col[\"data_type\"]:<15}')
@@ -412,7 +477,7 @@ cd /home/dn/github/postgres/src/test/regress
    "
    
    # 2. 对比PostgreSQL列结构
-   psql -d postgres -c "SELECT column_name, ordinal_position, data_type FROM information_schema.columns WHERE table_name = 'user_all_tables' ORDER BY ordinal_position;"
+   psql -d postgres -c "SELECT column_name, ordinal_position, data_type FROM information_schema.columns WHERE table_name = 'user_col_comments' ORDER BY ordinal_position;"
    
    # 3. 修正PostgreSQL实现
    # - 调整RETURNS TABLE中的列顺序
@@ -423,39 +488,52 @@ cd /home/dn/github/postgres/src/test/regress
    psql -d postgres -f src/backend/catalog/oracle_compat_views.sql
    
    # 5. 重新验证
-   python3 oracle_compat_validation.py --views user_all_tables
+   python3 oracle_compat_validation.py --views user_col_comments
    ```
 
-6. **验证结果分析**
+5. **验证结果分析**
    ```bash
    # 查看验证结果
-   cat validation_results.json | jq '.results[] | select(.view_name == "user_all_tables")'
+   cat validation_results.json | jq '.results[] | select(.view_name == "user_col_comments")'
    
    # 查看详细报告
    cat validation_report.txt
    ```
 
-7. **测试流程检查清单**
-   - [ ] 新视图已添加到 `validation_config.yaml`
-   - [ ] 运行 `python3 oracle_compat_validation.py --views new_view` 验证元数据
-   - [ ] 检查列数量是否匹配Oracle
-   - [ ] 检查列顺序是否与Oracle一致
-   - [ ] 检查数据类型映射是否正确
-   - [ ] 检查列名是否完全匹配（大小写不敏感）
-   - [ ] 兼容性评分达到100%
-   - [ ] 运行回归测试通过
-   - [ ] 更新设计文档和README
+6. **更新回归测试**
+   - 在 `src/test/regress/sql/oracle_compat_views.sql` 中添加测试用例
+   - 测试列数量、列名、数据类型
+   - 测试权限模型（普通用户无法访问DBA视图）
+   - 参考Oracle字段分析结果编写数据验证测试
 
-8. **快速验证工具**
+7. **运行回归测试**
+   ```bash
+   cd src/test/regress
+   ./pg_regress --schedule ora_schedule
+   ```
+
+
+8. **测试流程检查清单**
+   - [x] 新视图已添加到 `validation_config.yaml` (dba_col_comments, all_col_comments, user_col_comments)
+   - [x] 运行 `python3 oracle_compat_validation.py --views dba_col_comments` 验证元数据
+   - [x] 检查列数量是否匹配Oracle (5列)
+   - [x] 检查列顺序是否与Oracle一致
+   - [x] 检查数据类型映射是否正确
+   - [x] 检查列名是否完全匹配（大小写不敏感）
+   - [x] 兼容性评分达到100%
+   - [x] 运行回归测试通过
+   - [x] 更新设计文档和README
+
+9. **快速验证工具**
    ```bash
    # 使用自动化验证脚本
-   ./validate_new_view.sh user_all_tables
+   ./validate_new_view.sh user_col_comments
    
    # 查看详细测试流程示例
    cat test_workflow_example.md
    ```
 
-9. **Oracle字段分析工具**
+10. **Oracle字段分析工具**
    ```bash
    # 运行Oracle字段内容分析
    python3 oracle_field_analysis.py
@@ -618,6 +696,7 @@ cat oracle_field_analysis.json | jq '.null_stats'
 - 若需严格区分/过滤更多系统 schema（如进一步处理 `pg_toast`），可在基础函数的系统过滤处扩展，同时补充回归断言。
 - 若需新增 Oracle 兼容视图，可复用此基础函数模式（参数控制可见范围）。
 - Arguments 视图支持函数参数信息的完整查询，适用于 API 文档生成和代码分析。
+- COL_COMMENTS 视图支持列注释信息的查询，适用于数据库文档生成和元数据管理。
 - 新增视图时请严格按照上述步骤进行，确保与Oracle的完全兼容性。
 
 

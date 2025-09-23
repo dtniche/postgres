@@ -14,10 +14,14 @@ DROP VIEW IF EXISTS user_arguments CASCADE;
 DROP VIEW IF EXISTS dba_col_privs CASCADE;
 DROP VIEW IF EXISTS all_col_privs CASCADE;
 DROP VIEW IF EXISTS user_col_privs CASCADE;
+DROP VIEW IF EXISTS dba_col_comments CASCADE;
+DROP VIEW IF EXISTS all_col_comments CASCADE;
+DROP VIEW IF EXISTS user_col_comments CASCADE;
 DROP FUNCTION IF EXISTS all_tables_base(boolean, boolean, boolean);
 DROP FUNCTION IF EXISTS tables_base(boolean, boolean, boolean);
 DROP FUNCTION IF EXISTS arguments_base(boolean, boolean, boolean);
 DROP FUNCTION IF EXISTS col_privs_base(boolean, boolean, boolean);
+DROP FUNCTION IF EXISTS col_comments_base(boolean, boolean, boolean);
 -- 创建基础函数，用于生成所有表信息
 -- 参数: include_system_tables (是否包含系统表), current_user_only (是否只包含当前用户的表)
 CREATE OR REPLACE FUNCTION tables_base(
@@ -112,202 +116,202 @@ CREATE OR REPLACE FUNCTION tables_base(
     data_link_dml_enabled text,
     logical_replication text
   ) LANGUAGE sql STABLE AS $$
-SELECT -- 基本标识信息（无 owner）
-  c.relname AS table_name,
-  n.nspname AS tablespace_name,
-  NULL::text AS cluster_name,
-  NULL::text AS iot_name,
-  -- 表状态信息 (6)
-  CASE
-    WHEN c.relkind = 'r' THEN 'VALID'
-    WHEN c.relkind = 'p' THEN 'VALID'
-    ELSE 'INVALID'
-  END AS status,
-  -- 存储参数 (7-16) - 使用 NUMERIC 类型匹配 Oracle NUMBER
-  -- Oracle pct_free: 0, 10 (空闲空间百分比)
-  CASE
-    WHEN c.reloptions IS NOT NULL
-    AND EXISTS (
-      SELECT 1
-      FROM unnest(c.reloptions) AS option
-      WHERE option LIKE 'fillfactor=%'
-    ) THEN COALESCE(
-      (
-        SELECT (string_to_array(option, '=')) [2]::numeric
+  SELECT -- 基本标识信息（无 owner）
+    c.relname::text AS table_name,
+    n.nspname::text AS tablespace_name,
+    NULL::text AS cluster_name,
+    NULL::text AS iot_name,
+    -- 表状态信息 (6)
+    CASE
+      WHEN c.relkind = 'r' THEN 'VALID'
+      WHEN c.relkind = 'p' THEN 'VALID'
+      ELSE 'INVALID'
+    END AS status,
+    -- 存储参数 (7-16) - 使用 NUMERIC 类型匹配 Oracle NUMBER
+    -- Oracle pct_free: 0, 10 (空闲空间百分比)
+    CASE
+      WHEN c.reloptions IS NOT NULL
+      AND EXISTS (
+        SELECT 1
         FROM unnest(c.reloptions) AS option
         WHERE option LIKE 'fillfactor=%'
-      ),
-      10::numeric
-    )
-    ELSE 0::numeric
-  END AS pct_free,
-  -- Oracle pct_used: 0, 40 (已使用空间百分比)
-  CASE
-    WHEN c.reloptions IS NOT NULL
-    AND EXISTS (
-      SELECT 1
-      FROM unnest(c.reloptions) AS option
-      WHERE option LIKE 'fillfactor=%'
-    ) THEN COALESCE(
-      (
-        SELECT 100 - (string_to_array(option, '=')) [2]::numeric
+      ) THEN COALESCE(
+        (
+          SELECT (string_to_array(option, '=')) [2]::numeric
+          FROM unnest(c.reloptions) AS option
+          WHERE option LIKE 'fillfactor=%'
+        ),
+        10::numeric
+      )
+      ELSE 0::numeric
+    END AS pct_free,
+    -- Oracle pct_used: 0, 40 (已使用空间百分比)
+    CASE
+      WHEN c.reloptions IS NOT NULL
+      AND EXISTS (
+        SELECT 1
         FROM unnest(c.reloptions) AS option
         WHERE option LIKE 'fillfactor=%'
-      ),
-      40::numeric
+      ) THEN COALESCE(
+        (
+          SELECT 100 - (string_to_array(option, '=')) [2]::numeric
+          FROM unnest(c.reloptions) AS option
+          WHERE option LIKE 'fillfactor=%'
+        ),
+        40::numeric
+      )
+      ELSE 0::numeric
+    END AS pct_used,
+    NULL::numeric AS ini_trans,
+    NULL::numeric AS max_trans,
+    NULL::numeric AS initial_extent,
+    NULL::numeric AS next_extent,
+    NULL::numeric AS min_extents,
+    NULL::numeric AS max_extents,
+    NULL::numeric AS pct_increase,
+    NULL::numeric AS freelists,
+    NULL::numeric AS freelist_groups,
+    -- 日志和备份信息 (17-18)
+    -- Oracle logging: 'NO', 'YES', NULL
+    CASE
+      WHEN c.relpersistence = 'p' THEN 'NO' -- 永久表通常不记录日志
+      WHEN c.relpersistence = 't' THEN NULL -- 临时表可能为NULL
+      ELSE 'YES' -- 其他情况记录日志
+    END AS logging,
+    -- Oracle backed_up: 只有 'N'
+    'N' AS backed_up,
+    -- 统计信息 (19-28) - 使用 NUMERIC 类型匹配 Oracle NUMBER
+    COALESCE(s.n_live_tup, 0)::numeric AS num_rows,
+    COALESCE(s.n_live_tup, 0)::numeric AS blocks,
+    COALESCE(s.n_dead_tup, 0)::numeric AS empty_blocks,
+    0::numeric AS avg_space,
+    COALESCE(s.n_tup_hot_upd, 0)::numeric AS chain_cnt,
+    0::numeric AS avg_row_len,
+    NULL::numeric AS avg_space_freelist_blocks,
+    NULL::numeric AS num_freelist_blocks,
+    NULL::text AS degree,
+    NULL::text AS instances,
+    -- 缓存和锁定信息 (29-30)
+    CASE
+      WHEN c.reloptions IS NOT NULL
+      AND 'buffer_pool=keep' = ANY(c.reloptions) THEN 'Y'
+      ELSE 'N'
+    END AS cache,
+    'ENABLED' AS table_lock,
+    -- 采样和分析信息 (31-32)
+    COALESCE(s.n_live_tup, 0)::numeric AS sample_size,
+    COALESCE(s.last_analyze, s.last_autoanalyze)::timestamp AS last_analyzed,
+    -- 分区信息 (33-35)
+    CASE
+      WHEN c.relkind = 'p' THEN 'YES'
+      ELSE 'NO'
+    END AS partitioned,
+    NULL::text AS iot_type,
+    -- 临时表信息 (38-40)
+    CASE
+      WHEN c.relpersistence = 't' THEN 'Y'
+      ELSE 'N'
+    END AS temporary,
+    'N' AS secondary,
+    'N' AS nested,
+    -- 存储池信息 (41-43)
+    CASE
+      WHEN c.reloptions IS NOT NULL
+      AND 'buffer_pool=keep' = ANY(c.reloptions) THEN 'KEEP'
+      WHEN c.reloptions IS NOT NULL
+      AND 'buffer_pool=recycle' = ANY(c.reloptions) THEN 'RECYCLE'
+      ELSE 'DEFAULT'
+    END AS buffer_pool,
+    'N' AS flash_cache,
+    'N' AS cell_flash_cache,
+    -- 行移动和其他特性 (44-50)
+    'DISABLED' AS row_movement,
+    'YES' AS global_stats,
+    'NO' AS user_stats,
+    NULL::text AS duration,
+    'N' AS skip_corrupt,
+    'YES' AS monitoring,
+    NULL::text AS cluster_owner,
+    -- 依赖和压缩信息 (51-55)
+    'N' AS dependencies,
+    CASE
+      WHEN c.reloptions IS NOT NULL
+      AND 'compression=true' = ANY(c.reloptions) THEN 'ENABLED'
+      ELSE 'DISABLED'
+    END AS compression,
+    NULL::text AS compress_for,
+    'N' AS dropped,
+    -- 段和内存信息 (55-70) - 只保留Oracle中存在的列
+    -- Oracle segment_created: 'N/A', 'NO', 'YES'
+    CASE
+      WHEN c.relpersistence = 't' THEN 'N/A' -- 临时表
+      WHEN c.relkind = 'p' THEN 'NO' -- 分区表
+      ELSE 'YES' -- 普通表
+    END AS segment_created,
+    'N' AS inmemory,
+    NULL::text AS inmemory_priority,
+    NULL::text AS inmemory_distribute,
+    NULL::text AS inmemory_compression,
+    NULL::text AS inmemory_duplicate,
+    'N' AS external,
+    'N' AS hybrid,
+    NULL::text AS cellmemory,
+    NULL::text AS inmemory_service,
+    NULL::text AS inmemory_service_name,
+    'N' AS memoptimize_read,
+    'N' AS memoptimize_write,
+    'N' AS has_sensitive_column,
+    'N' AS logical_replication,
+    -- 额外兼容列 (71-89)
+    'N' AS read_only,
+    'N' AS result_cache,
+    'N' AS clustering,
+    'N' AS activity_tracking,
+    NULL::text AS dml_timestamp,
+    'N' AS has_identity,
+    'N' AS container_data,
+    NULL::text AS default_collation,
+    'N' AS duplicated,
+    'N' AS sharded,
+    'N' AS externally_sharded,
+    'N' AS externally_duplicated,
+    'N' AS containers_default,
+    NULL::text AS container_map,
+    NULL::text AS extended_data_link,
+    NULL::text AS extended_data_link_map,
+    NULL::text AS container_map_object,
+    'N' AS admit_null,
+    'N' AS data_link_dml_enabled
+  FROM pg_class c
+    LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
+    LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
+  WHERE c.relkind IN ('r', 'p') -- 只包含普通表和分区表
+    AND NOT pg_is_other_temp_schema(n.oid)
+    AND (
+      CASE
+        WHEN include_system_tables THEN true
+        ELSE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      END
     )
-    ELSE 0::numeric
-  END AS pct_used,
-  NULL::numeric AS ini_trans,
-  NULL::numeric AS max_trans,
-  NULL::numeric AS initial_extent,
-  NULL::numeric AS next_extent,
-  NULL::numeric AS min_extents,
-  NULL::numeric AS max_extents,
-  NULL::numeric AS pct_increase,
-  NULL::numeric AS freelists,
-  NULL::numeric AS freelist_groups,
-  -- 日志和备份信息 (17-18)
-  -- Oracle logging: 'NO', 'YES', NULL
-  CASE
-    WHEN c.relpersistence = 'p' THEN 'NO' -- 永久表通常不记录日志
-    WHEN c.relpersistence = 't' THEN NULL -- 临时表可能为NULL
-    ELSE 'YES' -- 其他情况记录日志
-  END AS logging,
-  -- Oracle backed_up: 只有 'N'
-  'N' AS backed_up,
-  -- 统计信息 (19-28) - 使用 NUMERIC 类型匹配 Oracle NUMBER
-  COALESCE(s.n_live_tup, 0)::numeric AS num_rows,
-  COALESCE(s.n_live_tup, 0)::numeric AS blocks,
-  COALESCE(s.n_dead_tup, 0)::numeric AS empty_blocks,
-  0::numeric AS avg_space,
-  COALESCE(s.n_tup_hot_upd, 0)::numeric AS chain_cnt,
-  0::numeric AS avg_row_len,
-  NULL::numeric AS avg_space_freelist_blocks,
-  NULL::numeric AS num_freelist_blocks,
-  NULL::text AS degree,
-  NULL::text AS instances,
-  -- 缓存和锁定信息 (29-30)
-  CASE
-    WHEN c.reloptions IS NOT NULL
-    AND 'buffer_pool=keep' = ANY(c.reloptions) THEN 'Y'
-    ELSE 'N'
-  END AS cache,
-  'ENABLED' AS table_lock,
-  -- 采样和分析信息 (31-32)
-  COALESCE(s.n_live_tup, 0)::numeric AS sample_size,
-  COALESCE(s.last_analyze, s.last_autoanalyze)::timestamp AS last_analyzed,
-  -- 分区信息 (33-35)
-  CASE
-    WHEN c.relkind = 'p' THEN 'YES'
-    ELSE 'NO'
-  END AS partitioned,
-  NULL::text AS iot_type,
-  -- 临时表信息 (38-40)
-  CASE
-    WHEN c.relpersistence = 't' THEN 'Y'
-    ELSE 'N'
-  END AS temporary,
-  'N' AS secondary,
-  'N' AS nested,
-  -- 存储池信息 (41-43)
-  CASE
-    WHEN c.reloptions IS NOT NULL
-    AND 'buffer_pool=keep' = ANY(c.reloptions) THEN 'KEEP'
-    WHEN c.reloptions IS NOT NULL
-    AND 'buffer_pool=recycle' = ANY(c.reloptions) THEN 'RECYCLE'
-    ELSE 'DEFAULT'
-  END AS buffer_pool,
-  'N' AS flash_cache,
-  'N' AS cell_flash_cache,
-  -- 行移动和其他特性 (44-50)
-  'DISABLED' AS row_movement,
-  'YES' AS global_stats,
-  'NO' AS user_stats,
-  NULL::text AS duration,
-  'N' AS skip_corrupt,
-  'YES' AS monitoring,
-  NULL::text AS cluster_owner,
-  -- 依赖和压缩信息 (51-55)
-  'N' AS dependencies,
-  CASE
-    WHEN c.reloptions IS NOT NULL
-    AND 'compression=true' = ANY(c.reloptions) THEN 'ENABLED'
-    ELSE 'DISABLED'
-  END AS compression,
-  NULL::text AS compress_for,
-  'N' AS dropped,
-  -- 段和内存信息 (55-70) - 只保留Oracle中存在的列
-  -- Oracle segment_created: 'N/A', 'NO', 'YES'
-  CASE
-    WHEN c.relpersistence = 't' THEN 'N/A' -- 临时表
-    WHEN c.relkind = 'p' THEN 'NO' -- 分区表
-    ELSE 'YES' -- 普通表
-  END AS segment_created,
-  'N' AS inmemory,
-  NULL::text AS inmemory_priority,
-  NULL::text AS inmemory_distribute,
-  NULL::text AS inmemory_compression,
-  NULL::text AS inmemory_duplicate,
-  'N' AS external,
-  'N' AS hybrid,
-  NULL::text AS cellmemory,
-  NULL::text AS inmemory_service,
-  NULL::text AS inmemory_service_name,
-  'N' AS memoptimize_read,
-  'N' AS memoptimize_write,
-  'N' AS has_sensitive_column,
-  'N' AS logical_replication,
-  -- 额外兼容列 (71-89)
-  'N' AS read_only,
-  'N' AS result_cache,
-  'N' AS clustering,
-  'N' AS activity_tracking,
-  NULL::text AS dml_timestamp,
-  'N' AS has_identity,
-  'N' AS container_data,
-  NULL::text AS default_collation,
-  'N' AS duplicated,
-  'N' AS sharded,
-  'N' AS externally_sharded,
-  'N' AS externally_duplicated,
-  'N' AS containers_default,
-  NULL::text AS container_map,
-  NULL::text AS extended_data_link,
-  NULL::text AS extended_data_link_map,
-  NULL::text AS container_map_object,
-  'N' AS admit_null,
-  'N' AS data_link_dml_enabled
-FROM pg_class c
-  LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
-  LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
-  LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
-WHERE c.relkind IN ('r', 'p') -- 只包含普通表和分区表
-  AND NOT pg_is_other_temp_schema(n.oid)
-  AND (
-    CASE
-      WHEN include_system_tables THEN true
-      ELSE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-    END
-  )
-  AND (
-    CASE
-      WHEN current_user_only THEN pg_get_userbyid(c.relowner) = current_user
-      ELSE true
-    END
-  )
-  AND (
-    NOT visible_only
-    OR pg_get_userbyid(c.relowner) = current_user
-    OR has_table_privilege(c.oid, 'SELECT')
-    OR has_table_privilege(c.oid, 'INSERT')
-    OR has_table_privilege(c.oid, 'UPDATE')
-    OR has_table_privilege(c.oid, 'DELETE')
-    OR has_table_privilege(c.oid, 'REFERENCES')
-    OR has_table_privilege(c.oid, 'TRIGGER')
-    OR pg_has_role(current_user, 'pg_read_all_data', 'member')
-    OR pg_has_role(current_user, 'pg_write_all_data', 'member')
-  );
+    AND (
+      CASE
+        WHEN current_user_only THEN pg_get_userbyid(c.relowner) = current_user
+        ELSE true
+      END
+    )
+    AND (
+      NOT visible_only
+      OR pg_get_userbyid(c.relowner) = current_user
+      OR has_table_privilege(c.oid, 'SELECT')
+      OR has_table_privilege(c.oid, 'INSERT')
+      OR has_table_privilege(c.oid, 'UPDATE')
+      OR has_table_privilege(c.oid, 'DELETE')
+      OR has_table_privilege(c.oid, 'REFERENCES')
+      OR has_table_privilege(c.oid, 'TRIGGER')
+      OR pg_has_role(current_user, 'pg_read_all_data', 'member')
+      OR pg_has_role(current_user, 'pg_write_all_data', 'member')
+    );
 $$;
 -- 包装函数，固定参数并控制可见性与权限暴露（紧随 base 定义后）
 -- remove duplicate earlier wrapper set; keep only the set below
@@ -318,14 +322,14 @@ CREATE VIEW dba_tables AS
 SELECT pg_get_userbyid(c.relowner) AS owner,
   b.*
 FROM tables_base(true, false, false) AS b
-  JOIN pg_class c ON c.relname = b.table_name
+  JOIN pg_class c ON c.relname::text = b.table_name
   JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = b.tablespace_name;
 CREATE VIEW all_tables AS
 SELECT pg_get_userbyid(c.relowner) AS owner,
   b.*
 FROM tables_base(true, false, true) AS b
-  JOIN pg_class c ON c.relname = b.table_name
+  JOIN pg_class c ON c.relname::text = b.table_name
   JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = b.tablespace_name;
 -- USER_TABLES：当前用户拥有的表（与 Oracle 一致：不包含 OWNER 列）
@@ -556,7 +560,7 @@ SELECT pg_get_userbyid(c.relowner) AS owner,
   b.has_sensitive_column,
   b.logical_replication
 FROM all_tables_base(true, false, false) AS b
-  JOIN pg_class c ON c.relname = b.table_name
+  JOIN pg_class c ON c.relname::text = b.table_name
   JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = b.tablespace_name;
 CREATE VIEW all_all_tables AS
@@ -631,7 +635,7 @@ SELECT pg_get_userbyid(c.relowner) AS owner,
   b.has_sensitive_column,
   b.logical_replication
 FROM all_tables_base(true, false, true) AS b
-  JOIN pg_class c ON c.relname = b.table_name
+  JOIN pg_class c ON c.relname::text = b.table_name
   JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = b.tablespace_name;
 CREATE VIEW user_all_tables AS
@@ -684,7 +688,16 @@ type_len_var int;
 type_type_var char;
 type_mod_var int;
 type_ns_var oid;
-BEGIN FOR rec IN
+BEGIN
+  -- 权限检查：如果请求DBA级别的数据（不限制为当前用户且不限制可见性），
+  -- 则检查调用者是否为超级用户
+  IF NOT current_user_only AND NOT visible_only THEN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+      RAISE EXCEPTION 'permission denied for function arguments_base: DBA-level access requires superuser privileges';
+    END IF;
+  END IF;
+
+  FOR rec IN
 SELECT p.oid as proc_oid,
   p.proname,
   p.pronamespace,
@@ -917,7 +930,16 @@ privilege_var text;
 grantable_var text;
 common_var text;
 inherited_var text;
-BEGIN -- 遍历所有表和列权限
+BEGIN
+  -- 权限检查：如果请求DBA级别的数据（不限制为当前用户且不限制可见性），
+  -- 则检查调用者是否为超级用户
+  IF NOT current_user_only AND NOT visible_only THEN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+      RAISE EXCEPTION 'permission denied for function col_privs_base: DBA-level access requires superuser privileges';
+    END IF;
+  END IF;
+
+  -- 遍历所有表和列权限
 FOR rec IN
 SELECT c.oid as table_oid,
   c.relname,
@@ -1058,9 +1080,6 @@ REVOKE ALL ON dba_arguments
 FROM PUBLIC;
 REVOKE ALL ON dba_col_privs
 FROM PUBLIC;
--- 禁止直接调用基础函数以避免权限绕过
-REVOKE EXECUTE ON FUNCTION col_privs_base(boolean, boolean, boolean)
-FROM PUBLIC;
 GRANT SELECT ON all_tables TO PUBLIC;
 GRANT SELECT ON all_all_tables TO PUBLIC;
 GRANT SELECT ON all_arguments TO PUBLIC;
@@ -1069,3 +1088,73 @@ GRANT SELECT ON user_tables TO PUBLIC;
 GRANT SELECT ON user_all_tables TO PUBLIC;
 GRANT SELECT ON user_arguments TO PUBLIC;
 GRANT SELECT ON user_col_privs TO PUBLIC;
+
+-- ========================================
+-- Column Comments base and views (Oracle-style COL_COMMENTS)
+-- ========================================
+DROP FUNCTION IF EXISTS col_comments_base(boolean, boolean, boolean);
+CREATE OR REPLACE FUNCTION col_comments_base(
+    include_system_objects boolean DEFAULT true,
+    current_user_only boolean DEFAULT false,
+    visible_only boolean DEFAULT false
+  ) RETURNS TABLE (
+    owner text,
+    table_name text,
+    column_name text,
+    comments text,
+    origin_con_id numeric
+  ) LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  IF NOT current_user_only AND NOT visible_only THEN
+    IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+      RAISE EXCEPTION 'permission denied for function col_comments_base: DBA-level access requires superuser privileges';
+    END IF;
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    pg_get_userbyid(c.relowner)::text AS owner,
+    c.relname::text AS table_name,
+    a.attname::text AS column_name,
+    d.description AS comments,
+    NULL::numeric AS origin_con_id
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+  LEFT JOIN pg_description d ON d.objoid = c.oid AND d.classoid = 'pg_class'::regclass AND d.objsubid = a.attnum
+  WHERE c.relkind IN ('r','p')
+    AND NOT pg_is_other_temp_schema(n.oid)
+    AND (
+      CASE WHEN include_system_objects THEN true
+           ELSE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') END)
+    AND (
+      CASE WHEN current_user_only THEN pg_get_userbyid(c.relowner) = current_user
+           ELSE true END)
+    AND (
+      NOT visible_only
+      OR pg_get_userbyid(c.relowner) = current_user
+      OR has_table_privilege(c.oid, 'SELECT')
+      OR has_table_privilege(c.oid, 'INSERT')
+      OR has_table_privilege(c.oid, 'UPDATE')
+      OR has_table_privilege(c.oid, 'DELETE')
+      OR has_table_privilege(c.oid, 'REFERENCES')
+      OR has_table_privilege(c.oid, 'TRIGGER')
+      OR pg_has_role(current_user, 'pg_read_all_data', 'member')
+      OR pg_has_role(current_user, 'pg_write_all_data', 'member')
+    );
+END;
+$$;
+
+CREATE VIEW dba_col_comments AS
+SELECT * FROM col_comments_base(true, false, false);
+
+CREATE VIEW all_col_comments AS
+SELECT * FROM col_comments_base(true, false, true);
+
+CREATE VIEW user_col_comments AS
+SELECT table_name, column_name, comments, origin_con_id
+FROM col_comments_base(false, true, false);
+
+REVOKE ALL ON dba_col_comments FROM PUBLIC;
+GRANT SELECT ON all_col_comments TO PUBLIC;
+GRANT SELECT ON user_col_comments TO PUBLIC;

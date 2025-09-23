@@ -15,6 +15,9 @@ views:
   - dba_col_privs
   - all_col_privs
   - user_col_privs
+  - dba_col_comments
+  - all_col_comments
+  - user_col_comments
 
 # PostgreSQL数据库连接配置
 postgresql:

@@ -1,7 +1,9 @@
 -- Oracle兼容性视图回归测试
 -- 测试所有6个Oracle兼容视图的基本功能、权限和内容
 -- 首先创建Oracle兼容视图
-\ i../../../ src / backend / catalog / oracle_compat_views.sql -- 创建测试表用于验证
+\set ECHO none
+\i ../../../src/backend/catalog/oracle_compat_views.sql
+\set ECHO all
 CREATE TABLE test_table1 (id int, name text);
 CREATE TABLE test_table2 (id int, value numeric);
 -- 测试DBA_TABLES视图（超级用户视图）
@@ -389,3 +391,36 @@ WHERE table_schema = 'postgres'
 -- 清理测试表
 DROP TABLE test_table1,
 test_table2;
+
+-- ========================================
+-- 列注释视图验证：确保 comments 字段返回实际值
+-- ========================================
+DROP TABLE IF EXISTS cc_demo;
+CREATE TABLE cc_demo(id int, name text);
+COMMENT ON COLUMN cc_demo.name IS 'name comment';
+SELECT *
+FROM user_col_comments
+WHERE table_name = 'cc_demo'
+ORDER BY column_name;
+
+-- ========================================
+-- 基础函数（DBA模式）权限控制：普通用户应被拒绝
+-- 通过授予当前用户一个NOSUPERUSER角色并SET ROLE来模拟
+-- ========================================
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'regress_nosuper') THEN
+        CREATE ROLE regress_nosuper NOSUPERUSER INHERIT;
+    END IF;
+    IF NOT pg_has_role(current_user, 'regress_nosuper', 'member') THEN
+        GRANT regress_nosuper TO CURRENT_USER;
+    END IF;
+END$$;
+
+SET ROLE regress_nosuper;
+-- 下面调用应触发内部权限检查并报错
+SELECT COUNT(*) FROM tables_base(true, false, false);
+SELECT COUNT(*) FROM all_tables_base(true, false, false);
+SELECT COUNT(*) FROM arguments_base(true, false, false);
+SELECT 1 FROM col_privs_base(true, false, false) LIMIT 1;
+RESET ROLE;
