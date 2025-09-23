@@ -9,6 +9,12 @@ views:
   - dba_all_tables
   - all_all_tables
   - user_all_tables
+  - dba_arguments
+  - all_arguments
+  - user_arguments
+  - dba_col_privs
+  - all_col_privs
+  - user_col_privs
 
 # PostgreSQL数据库连接配置
 postgresql:

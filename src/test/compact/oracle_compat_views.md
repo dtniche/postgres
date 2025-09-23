@@ -127,8 +127,497 @@ cd /home/dn/github/postgres/src/test/regress
 ./pg_regress --schedule ora_schedule
 ```
 
+#### 新增：Arguments 视图设计
+
+##### 视图与权限
+- dba_arguments
+  - 含义：所有函数参数（含系统函数），DBA 视图
+  - 实现：`SELECT * FROM arguments_base(true, false)`
+  - 权限：不授予 PUBLIC（`REVOKE ALL ON dba_arguments FROM PUBLIC`）
+
+- all_arguments
+  - 含义：当前用户可见的所有函数参数，包含系统函数
+  - 实现：`SELECT * FROM arguments_base(true, false)`
+  - 权限：`GRANT SELECT ON all_arguments TO PUBLIC`
+
+- user_arguments
+  - 含义：当前用户拥有的函数参数
+  - 实现：`SELECT * FROM arguments_base(false, true)`
+  - 权限：`GRANT SELECT ON user_arguments TO PUBLIC`
+
+##### 数据来源与过滤
+- 主来源：
+  - `pg_proc p`（函数/过程：`prokind in ('f','p','a','w')`）
+  - `pg_namespace n`（schema）
+  - `pg_type t`（参数类型）
+- 过滤：
+  - 排除其他临时 schema：`NOT pg_is_other_temp_schema(n.oid)`
+  - 是否包含系统函数：
+    - 包含：不过滤系统 schema
+    - 排除：排除 `pg_catalog`, `information_schema`, `pg_toast`
+  - 仅当前用户：`pg_get_userbyid(p.proowner) = current_user`
+
+##### 列映射表（29 列）
+以下表格列出 Oracle DBA_ARGUMENTS 的列映射，PostgreSQL 实现完全匹配 Oracle 的29列结构。
+
+| 序 | Oracle 含义 | 列名 | 类型 | 来源/规则 | 说明 |
+|----|-------------|------|------|-----------|------|
+| 1 | 所有者 | owner | text | `pg_get_userbyid(p.proowner)` | 函数 owner 名称 |
+| 2 | 对象名 | object_name | text | `p.proname` | 函数名 |
+| 3 | 包名 | package_name | text | `NULL` | PostgreSQL 无包概念 |
+| 4 | 对象ID | object_id | numeric | `p.oid` | 函数 OID |
+| 5 | 重载号 | overload | text | `'1'` | 字符串类型，简化处理 |
+| 6 | 子程序ID | subprogram_id | numeric | `NULL` | PostgreSQL 无子程序概念 |
+| 7 | 参数名 | argument_name | text | `p.proargnames[i]` | 参数名称 |
+| 8 | 位置 | position | numeric | `i` | 参数位置（0=返回值） |
+| 9 | 序列 | sequence | numeric | `i` | 与位置相同 |
+| 10 | 数据级别 | data_level | numeric | `0` | 简化处理 |
+| 11 | 数据类型 | data_type | text | `t.typname` | 参数类型名 |
+| 12 | 默认标记 | defaulted | text | `NULL` | 简化处理 |
+| 13 | 默认值 | default_value | text | `NULL` | 简化处理 |
+| 14 | 默认长度 | default_length | numeric | `NULL` | 简化处理 |
+| 15 | 输入输出 | in_out | text | `proargmodes[i]` 映射 | IN/OUT/IN OUT |
+| 16 | 数据长度 | data_length | numeric | `t.typlen` | 类型长度 |
+| 17 | 精度 | data_precision | numeric | `t.typtypmod` | 数值类型精度 |
+| 18 | 标度 | data_scale | numeric | `t.typtypmod & 65535` | 数值类型标度 |
+| 19 | 基数 | radix | numeric | `10` | 数值类型基数 |
+| 20 | 字符集 | character_set_name | text | `NULL` | 简化处理 |
+| 21 | 类型所有者 | type_owner | text | `nt.nspname` | 类型所属 schema |
+| 22 | 类型名 | type_name | text | `t.typname` | 类型名称 |
+| 23 | 子类型名 | type_subname | text | `NULL` | 简化处理 |
+| 24 | 类型链接 | type_link | text | `NULL` | 简化处理 |
+| 25 | 类型对象类型 | type_object_type | text | `NULL` | 简化处理 |
+| 26 | PL/SQL类型 | pls_type | text | `t.typname` | 与类型名相同 |
+| 27 | 字符长度 | char_length | numeric | `t.typtypmod` | 字符串类型长度 |
+| 28 | 字符使用 | char_used | text | `B/C` | 字节/字符长度标志 |
+| 29 | 源容器ID | origin_con_id | numeric | `NULL` | 简化处理 |
+
+##### 实现特点
+- 使用 PL/pgSQL 函数实现，支持复杂的参数展开逻辑
+- 返回值作为 position=0 的特殊参数处理
+- 支持 IN/OUT/IN OUT 参数方向映射
+- 数值类型精度和标度正确解析
+- 字符串类型长度信息完整保留
+
+#### 新增：列权限视图设计 (COL_PRIVS)
+
+##### 1. 视图概述
+- **DBA_COL_PRIVS**: 所有列权限信息（含系统对象），DBA视图
+- **ALL_COL_PRIVS**: 当前用户可见的所有列权限，包含系统对象
+- **USER_COL_PRIVS**: 当前用户拥有的列权限（不含owner列）
+
+##### 2. 实现方式
+- 使用 `col_privs_base(include_system_objects, current_user_only)` 基础函数
+- 从 `pg_class`, `pg_attribute`, `pg_namespace` 系统表提取列权限信息
+- 模拟列权限信息（PostgreSQL的列权限管理相对简单）
+- 主要展示表结构，实际权限信息需要从pg_class_acl等系统表获取
+
+##### 3. 权限模型
+- **DBA_COL_PRIVS**: 不授予 PUBLIC（仅超级用户可见）
+- **ALL_COL_PRIVS**: 授予 PUBLIC（所有用户可见）
+- **USER_COL_PRIVS**: 授予 PUBLIC（所有用户可见）
+
+##### 4. 数据来源
+- `pg_class`: 表定义信息
+- `pg_attribute`: 列定义信息
+- `pg_namespace`: 模式信息
+- 支持系统表和用户表
+
+##### 5. 过滤规则
+- 系统对象过滤：根据 `nspname` 判断
+- 用户对象过滤：根据 `relowner` 判断
+- 支持表、分区表
+
+##### 6. 列映射表（9列）
+| 序 | Oracle 含义 | 列名 | 类型 | 来源/规则 | 说明 |
+|----|-------------|------|------|-----------|------|
+| 1 | 被授权者 | grantee | text | `'PUBLIC'` | 模拟权限信息 |
+| 2 | 所有者 | owner | text | `pg_get_userbyid(c.relowner)` | 仅DBA/USER视图 |
+| 3 | 表名 | table_name | text | `c.relname` | 表名 |
+| 4 | 列名 | column_name | text | `a.attname` | 列名 |
+| 5 | 授权者 | grantor | text | `pg_get_userbyid(c.relowner)` | 表所有者 |
+| 6 | 权限 | privilege | text | `'SELECT'` | 模拟权限 |
+| 7 | 可授权 | grantable | text | `'NO'` | 模拟权限 |
+| 8 | 公共 | common | text | `'NO'` | 模拟权限 |
+| 9 | 继承 | inherited | text | `'NO'` | 模拟权限 |
+
+##### 7. 特殊说明
+- PostgreSQL的列权限管理相对简单，这里主要展示表结构
+- 实际权限信息需要从pg_class_acl等系统表获取
+- 当前实现为模拟权限信息，用于兼容性测试
+
+#### 新增视图的方法和步骤
+
+##### 1. 设计阶段
+1. **分析Oracle视图结构**
+   - 查询Oracle数据字典获取目标视图的完整列信息
+   - 记录列名、数据类型、约束条件、列顺序
+   - 确定权限模型（DBA/ALL/USER）
+
+2. **Oracle字段内容分析工具**
+   - **工具文件**: `oracle_field_analysis.py`
+   - **用途**: 深入分析Oracle实际数据，获取字段值分布、样本数据和NULL值统计
+   - **功能模块**:
+     ```python
+     # 连接Oracle数据库（SYSDBA模式）
+     def connect_oracle()
+     
+     # 获取关键字段的值分布
+     def get_oracle_field_values(connection)
+     # 查询字段如：status, logging, backed_up, temporary, buffer_pool等
+     
+     # 获取样本数据（前10行）
+     def get_sample_data(connection)
+     
+     # 获取NULL值统计
+     def get_null_value_stats(connection)
+     ```
+   - **输出文件**: `oracle_field_analysis.json` 包含：
+     - `field_values`: 各字段的实际值分布（如status: ['VALID', 'INVALID']）
+     - `sample_data`: 样本数据示例（前10行记录）
+     - `null_stats`: NULL值统计信息（各字段的非NULL值数量）
+   - **使用场景**:
+     - 验证字段值的合理性（如status字段只有'VALID'/'INVALID'）
+     - 确定默认值和特殊值的处理逻辑
+     - 分析字段的NULL值比例，指导PostgreSQL实现
+     - 为列映射提供实际数据参考
+   - **运行示例**:
+     ```bash
+     python3 oracle_field_analysis.py
+     # 输出: oracle_field_analysis.json
+     ```
+
+3. **设计PostgreSQL映射**
+   - 确定数据来源（pg_class, pg_proc, pg_namespace等）
+   - 设计过滤逻辑（系统对象、用户权限）
+   - 规划列映射和数据类型转换
+   - 参考Oracle字段分析结果确定默认值
+
+##### 2. 实现阶段
+1. **运行Oracle字段分析**
+   ```bash
+   # 在实现前先分析Oracle实际数据
+   python3 oracle_field_analysis.py
+   
+   # 查看分析结果
+   cat oracle_field_analysis.json | jq '.field_values'
+   cat oracle_field_analysis.json | jq '.sample_data[0]'
+   cat oracle_field_analysis.json | jq '.null_stats'
+   ```
+
+2. **创建基础函数**
+   ```sql
+   CREATE OR REPLACE FUNCTION view_base(
+       include_system_objects boolean DEFAULT true,
+       current_user_only boolean DEFAULT false
+   )
+   RETURNS TABLE (
+       -- 按Oracle列顺序定义返回表结构
+       -- 参考oracle_field_analysis.json确定默认值
+       column1 text,
+       column2 numeric,
+       ...
+   )
+   LANGUAGE plpgsql
+   STABLE
+   AS $$
+   -- 实现逻辑
+   -- 使用Oracle字段分析结果确定默认值
+   $$;
+   ```
+
+2. **创建三个视图**
+   ```sql
+   -- DBA视图（包含系统对象，所有用户）
+   CREATE VIEW dba_view AS 
+   SELECT * FROM view_base(true, false);
+   
+   -- ALL视图（包含系统对象，所有用户）
+   CREATE VIEW all_view AS 
+   SELECT * FROM view_base(true, false);
+   
+   -- USER视图（仅当前用户对象）
+   CREATE VIEW user_view AS 
+   SELECT * FROM view_base(false, true);
+   ```
+
+3. **设置权限**
+   ```sql
+   -- DBA视图：不授予PUBLIC
+   REVOKE ALL ON dba_view FROM PUBLIC;
+   
+   -- ALL/USER视图：授予PUBLIC
+   GRANT SELECT ON all_view TO PUBLIC;
+   GRANT SELECT ON user_view TO PUBLIC;
+   ```
+
+##### 3. 测试阶段
+1. **验证Oracle字段分析结果**
+   ```bash
+   # 重新运行Oracle字段分析，确保数据是最新的
+   python3 oracle_field_analysis.py
+   
+   # 检查关键字段的值分布是否合理
+   cat oracle_field_analysis.json | jq '.field_values.status'
+   cat oracle_field_analysis.json | jq '.field_values.logging'
+   ```
+
+2. **更新回归测试**
+   - 在 `src/test/regress/sql/oracle_compat_views.sql` 中添加测试用例
+   - 测试列数量、列名、数据类型
+   - 测试权限模型（普通用户无法访问DBA视图）
+   - 参考Oracle字段分析结果编写数据验证测试
+
+3. **更新验证配置**
+   - 在 `validation_config.yaml` 中添加新视图到验证列表
+   - 运行兼容性验证：`python3 oracle_compat_validation.py`
+
+3. **运行回归测试**
+   ```bash
+   cd src/test/regress
+   ./pg_regress --schedule ora_schedule
+   ```
+
+4. **兼容性验证流程**
+   ```bash
+   # 验证特定视图的兼容性
+   python3 oracle_compat_validation.py --views dba_new_view all_new_view user_new_view
+   
+   # 验证单个视图（如user_all_tables）
+   python3 oracle_compat_validation.py --views user_all_tables
+   
+   # 生成详细报告
+   python3 oracle_compat_validation.py --views dba_new_view --output detailed_report.txt --json results.json
+   ```
+
+5. **根据验证结果修正实现**
+   - 查看 `validation_results.json` 中的Oracle列结构
+   - 对比PostgreSQL和Oracle的列顺序、数据类型
+   - 修正PostgreSQL实现以匹配Oracle结构
+   - 重新运行验证直到兼容性评分达到100%
+
+   **修正步骤详解**：
+   ```bash
+   # 1. 查看Oracle列结构
+   python3 -c "
+   import json
+   with open('validation_results.json', 'r') as f:
+       data = json.load(f)
+   for result in data['results']:
+       if result['view_name'] == 'user_all_tables':
+           print('Oracle列结构:')
+           for col in result['oracle']['columns']:
+               print(f'{col[\"ordinal_position\"]:2d}. {col[\"name\"]:<30} {col[\"data_type\"]:<15}')
+           break
+   "
+   
+   # 2. 对比PostgreSQL列结构
+   psql -d postgres -c "SELECT column_name, ordinal_position, data_type FROM information_schema.columns WHERE table_name = 'user_all_tables' ORDER BY ordinal_position;"
+   
+   # 3. 修正PostgreSQL实现
+   # - 调整RETURNS TABLE中的列顺序
+   # - 修正数据类型映射
+   # - 确保列名完全匹配
+   
+   # 4. 重新创建视图
+   psql -d postgres -f src/backend/catalog/oracle_compat_views.sql
+   
+   # 5. 重新验证
+   python3 oracle_compat_validation.py --views user_all_tables
+   ```
+
+6. **验证结果分析**
+   ```bash
+   # 查看验证结果
+   cat validation_results.json | jq '.results[] | select(.view_name == "user_all_tables")'
+   
+   # 查看详细报告
+   cat validation_report.txt
+   ```
+
+7. **测试流程检查清单**
+   - [ ] 新视图已添加到 `validation_config.yaml`
+   - [ ] 运行 `python3 oracle_compat_validation.py --views new_view` 验证元数据
+   - [ ] 检查列数量是否匹配Oracle
+   - [ ] 检查列顺序是否与Oracle一致
+   - [ ] 检查数据类型映射是否正确
+   - [ ] 检查列名是否完全匹配（大小写不敏感）
+   - [ ] 兼容性评分达到100%
+   - [ ] 运行回归测试通过
+   - [ ] 更新设计文档和README
+
+8. **快速验证工具**
+   ```bash
+   # 使用自动化验证脚本
+   ./validate_new_view.sh user_all_tables
+   
+   # 查看详细测试流程示例
+   cat test_workflow_example.md
+   ```
+
+9. **Oracle字段分析工具**
+   ```bash
+   # 运行Oracle字段内容分析
+   python3 oracle_field_analysis.py
+   
+   # 查看字段值分布
+   cat oracle_field_analysis.json | jq '.field_values'
+   
+   # 查看样本数据
+   cat oracle_field_analysis.json | jq '.sample_data[0]'
+   
+   # 查看NULL值统计
+   cat oracle_field_analysis.json | jq '.null_stats'
+   ```
+
+##### 4. 文档更新
+1. **更新设计文档**
+   - 在 `oracle_compat_views.md` 中添加新视图设计说明
+   - 包含列映射表、数据来源、过滤规则
+   - 记录实现特点和注意事项
+
+2. **更新README**
+   - 在 `README.md` 中更新验证视图列表
+   - 更新列数统计信息
+
+##### 5. 最佳实践
+1. **列顺序严格匹配Oracle**
+   - 使用 `RETURNS TABLE` 按Oracle顺序定义列
+   - 确保列位置与Oracle完全一致
+
+2. **数据类型映射**
+   - 数值类型：`numeric` → `NUMBER`
+   - 文本类型：`text` → `VARCHAR2/CHAR/CLOB/LONG`
+   - 时间类型：`timestamp` → `DATE/TIMESTAMP`
+   - 标识符：`name` → `VARCHAR2`
+
+3. **权限模型一致性**
+   - DBA视图：仅超级用户可访问
+   - ALL视图：所有用户可访问，包含系统对象
+   - USER视图：所有用户可访问，仅当前用户对象
+
+4. **错误处理**
+   - 使用 `COALESCE` 处理NULL值
+   - 提供合理的默认值
+   - 确保函数稳定性（STABLE）
+
+##### 6. 示例：新增DBA_INDEXES视图
+```sql
+-- 1. 创建基础函数
+CREATE OR REPLACE FUNCTION indexes_base(
+    include_system_objects boolean DEFAULT true,
+    current_user_only boolean DEFAULT false
+)
+RETURNS TABLE (
+    owner text,
+    index_name text,
+    table_name text,
+    table_owner text,
+    table_type text,
+    uniqueness text,
+    -- ... 其他列
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    FOR rec IN
+        SELECT i.oid, i.relname, c.relname as table_name, 
+               pg_get_userbyid(i.relowner) as owner_name
+        FROM pg_class i
+        JOIN pg_index ix ON ix.indexrelid = i.oid
+        JOIN pg_class c ON c.oid = ix.indrelid
+        WHERE i.relkind = 'i'
+          AND (include_system_objects OR c.relnamespace NOT IN (11, 99, 99))
+          AND (NOT current_user_only OR pg_get_userbyid(i.relowner) = current_user)
+    LOOP
+        owner := rec.owner_name;
+        index_name := rec.relname;
+        table_name := rec.table_name;
+        -- ... 设置其他列
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+-- 2. 创建视图
+CREATE VIEW dba_indexes AS SELECT * FROM indexes_base(true, false);
+CREATE VIEW all_indexes AS SELECT * FROM indexes_base(true, false);
+CREATE VIEW user_indexes AS SELECT * FROM indexes_base(false, true);
+
+-- 3. 设置权限
+REVOKE ALL ON dba_indexes FROM PUBLIC;
+GRANT SELECT ON all_indexes TO PUBLIC;
+GRANT SELECT ON user_indexes TO PUBLIC;
+```
+
+#### Oracle字段分析工具使用指南
+
+##### 工具概述
+`oracle_field_analysis.py` 是设计阶段的重要工具，用于深入分析Oracle实际数据，为PostgreSQL实现提供准确的数据参考。
+
+##### 主要功能
+1. **字段值分布分析**: 获取关键字段的所有可能值
+2. **样本数据提取**: 获取前10行实际数据示例  
+3. **NULL值统计**: 分析各字段的NULL值比例
+4. **数据质量验证**: 确保Oracle数据的合理性和一致性
+
+##### 使用方法
+```bash
+# 1. 运行分析
+python3 oracle_field_analysis.py
+
+# 2. 查看字段值分布
+cat oracle_field_analysis.json | jq '.field_values'
+
+# 3. 查看样本数据
+cat oracle_field_analysis.json | jq '.sample_data[0]'
+
+# 4. 查看NULL值统计
+cat oracle_field_analysis.json | jq '.null_stats'
+```
+
+##### 分析结果解读
+- **field_values**: 各字段的实际值分布，用于确定默认值和枚举值
+- **sample_data**: 样本数据，用于验证数据格式和内容
+- **null_stats**: NULL值统计，用于确定哪些字段可以为NULL
+
+##### 在开发流程中的应用
+1. **设计阶段**: 分析Oracle字段内容，确定实现策略
+2. **实现阶段**: 参考分析结果设置默认值和约束
+3. **测试阶段**: 验证PostgreSQL实现与Oracle数据的一致性
+
+##### 示例输出
+```json
+{
+  "timestamp": "2025-09-22T13:45:00",
+  "field_values": {
+    "status": ["VALID", "INVALID"],
+    "logging": ["YES", "NO"],
+    "temporary": ["N", "Y"],
+    "partitioned": ["NO", "YES"]
+  },
+  "sample_data": [
+    {
+      "owner": "SYS",
+      "table_name": "TAB$",
+      "status": "VALID",
+      "logging": "YES",
+      "temporary": "N"
+    }
+  ],
+  "null_stats": {
+    "total_tables": 1000,
+    "tablespace_name_not_null": 950,
+    "cluster_name_not_null": 0
+  }
+}
+```
+
 #### 变更与扩展
-- 若需严格区分/过滤更多系统 schema（如进一步处理 `pg_toast`），可在 `dba_all_tables_base` 的系统过滤处扩展，同时补充回归断言。
+- 若需严格区分/过滤更多系统 schema（如进一步处理 `pg_toast`），可在基础函数的系统过滤处扩展，同时补充回归断言。
 - 若需新增 Oracle 兼容视图，可复用此基础函数模式（参数控制可见范围）。
+- Arguments 视图支持函数参数信息的完整查询，适用于 API 文档生成和代码分析。
+- 新增视图时请严格按照上述步骤进行，确保与Oracle的完全兼容性。
 
 

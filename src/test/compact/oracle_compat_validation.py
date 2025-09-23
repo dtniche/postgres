@@ -480,7 +480,7 @@ class ViewComparator:
         # 根据设计文档的类型映射规则
         type_mapping = {
             'numeric': ['NUMBER', 'NUMERIC'],
-            'text': ['VARCHAR2', 'CHAR', 'CLOB', 'TEXT'],
+            'text': ['VARCHAR2', 'CHAR', 'CLOB', 'TEXT', 'LONG'],
             'timestamp': ['DATE', 'TIMESTAMP'],
             'name': ['VARCHAR2', 'CHAR']  # 当字段是PostgreSQL标识符时
         }
