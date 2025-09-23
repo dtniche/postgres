@@ -22,7 +22,7 @@ psql:../../../src/backend/catalog/oracle_compat_views.sql:21: NOTICE:  function 
 psql:../../../src/backend/catalog/oracle_compat_views.sql:22: NOTICE:  function arguments_base(pg_catalog.bool,pg_catalog.bool,pg_catalog.bool) does not exist, skipping
 psql:../../../src/backend/catalog/oracle_compat_views.sql:23: NOTICE:  function col_privs_base(pg_catalog.bool,pg_catalog.bool,pg_catalog.bool) does not exist, skipping
 psql:../../../src/backend/catalog/oracle_compat_views.sql:24: NOTICE:  function col_comments_base(pg_catalog.bool,pg_catalog.bool,pg_catalog.bool) does not exist, skipping
-psql:../../../src/backend/catalog/oracle_compat_views.sql:1095: NOTICE:  function col_comments_base(pg_catalog.bool,pg_catalog.bool,pg_catalog.bool) does not exist, skipping
+psql:../../../src/backend/catalog/oracle_compat_views.sql:1073: NOTICE:  function col_comments_base(pg_catalog.bool,pg_catalog.bool,pg_catalog.bool) does not exist, skipping
 CREATE TABLE test_table1 (id int, name text);
 CREATE TABLE test_table2 (id int, value numeric);
 -- 测试DBA_TABLES视图（超级用户视图）
@@ -659,10 +659,10 @@ ORDER BY ordinal_position;
  column_name | data_type | is_nullable 
 -------------+-----------+-------------
  grantee     | text      | YES
- owner       | name      | YES
- table_name  | name      | YES
- column_name | name      | YES
- grantor     | name      | YES
+ owner       | text      | YES
+ table_name  | text      | YES
+ column_name | text      | YES
+ grantor     | text      | YES
  privilege   | text      | YES
  grantable   | text      | YES
  common      | text      | YES

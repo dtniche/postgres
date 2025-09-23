@@ -981,28 +981,28 @@ FROM pg_attribute a
 WHERE a.attrelid = rec.table_oid
   AND a.attnum > 0
   AND NOT a.attisdropped LOOP -- 设置基本信息
-  owner_name := rec.owner_name;
-table_name_var := rec.relname;
-column_name_var := col_rec.attname;
--- 模拟列权限信息（PostgreSQL的列权限管理相对简单）
--- 这里主要展示表结构，实际权限信息需要从pg_class_acl等系统表获取
--- 模拟权限信息
-grantee_name := 'PUBLIC';
-grantor_name := rec.owner_name;
-privilege_var := 'SELECT';
-grantable_var := 'NO';
-common_var := 'NO';
-inherited_var := 'NO';
--- 返回记录
-grantee := grantee_name;
-owner := owner_name;
-table_name := table_name_var;
-column_name := column_name_var;
-grantor := grantor_name;
-privilege := privilege_var;
-grantable := grantable_var;
-common := common_var;
-inherited := inherited_var;
+  owner_name := rec.owner_name::text;
+  table_name_var := rec.relname::text;
+  column_name_var := col_rec.attname::text;
+  -- 模拟列权限信息（PostgreSQL的列权限管理相对简单）
+  -- 这里主要展示表结构，实际权限信息需要从pg_class_acl等系统表获取
+  -- 模拟权限信息
+  grantee_name := 'PUBLIC';
+  grantor_name := rec.owner_name::text;
+  privilege_var := 'SELECT';
+  grantable_var := 'NO';
+  common_var := 'NO';
+  inherited_var := 'NO';
+  -- 返回记录
+  grantee := grantee_name;
+  owner := owner_name;
+  table_name := table_name_var;
+  column_name := column_name_var;
+  grantor := grantor_name;
+  privilege := privilege_var;
+  grantable := grantable_var;
+  common := common_var;
+  inherited := inherited_var;
 RETURN NEXT;
 END LOOP;
 END LOOP;
@@ -1011,64 +1011,42 @@ END;
 $$;
 -- DBA_COL_PRIVS：所有列权限（含系统对象），DBA视图
 CREATE VIEW dba_col_privs AS
-SELECT 'PUBLIC'::text AS grantee,
-  pg_get_userbyid(c.relowner) AS owner,
-  c.relname AS table_name,
-  a.attname AS column_name,
-  pg_get_userbyid(c.relowner) AS grantor,
-  'SELECT'::text AS privilege,
-  'NO'::text AS grantable,
-  'NO'::text AS common,
-  'NO'::text AS inherited
-FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_attribute a ON a.attrelid = c.oid
-  AND a.attnum > 0
-  AND NOT a.attisdropped
-WHERE c.relkind IN ('r', 'p')
-  AND NOT pg_is_other_temp_schema(n.oid) -- include_system_objects = true
-  -- current_user_only = false
-  AND n.nspname = n.nspname;
+SELECT b.grantee,
+  b.owner,
+  b.table_name,
+  b.column_name,
+  b.grantor,
+  b.privilege,
+  b.grantable,
+  b.common,
+  b.inherited
+FROM col_privs_base(true, false, false) AS b;
 -- ALL_COL_PRIVS：当前用户可见的所有列权限，包含系统对象
 CREATE VIEW all_col_privs AS
-SELECT pg_get_userbyid(c.relowner) AS grantor,
-  'PUBLIC'::text AS grantee,
+SELECT b.grantor,
+  b.grantee,
   n.nspname AS table_schema,
-  c.relname AS table_name,
-  a.attname AS column_name,
-  'SELECT'::text AS privilege,
-  'NO'::text AS grantable,
-  'NO'::text AS common,
-  'NO'::text AS inherited
-FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_attribute a ON a.attrelid = c.oid
-  AND a.attnum > 0
-  AND NOT a.attisdropped
-WHERE c.relkind IN ('r', 'p')
-  AND NOT pg_is_other_temp_schema(n.oid) -- include_system_objects = true
-  -- current_user_only = false
-  AND n.nspname = n.nspname;
+  b.table_name,
+  b.column_name,
+  b.privilege,
+  b.grantable,
+  b.common,
+  b.inherited
+FROM col_privs_base(true, false, true) AS b
+  JOIN pg_class c ON c.relname::text = b.table_name
+  JOIN pg_namespace n ON n.oid = c.relnamespace;
 -- USER_COL_PRIVS：当前用户拥有的列权限（不含owner列）
 CREATE VIEW user_col_privs AS
-SELECT 'PUBLIC'::text AS grantee,
-  pg_get_userbyid(c.relowner) AS owner,
-  c.relname AS table_name,
-  a.attname AS column_name,
-  pg_get_userbyid(c.relowner) AS grantor,
-  'SELECT'::text AS privilege,
-  'NO'::text AS grantable,
-  'NO'::text AS common,
-  'NO'::text AS inherited
-FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_attribute a ON a.attrelid = c.oid
-  AND a.attnum > 0
-  AND NOT a.attisdropped
-WHERE c.relkind IN ('r', 'p')
-  AND NOT pg_is_other_temp_schema(n.oid) -- include_system_objects = false
-  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') -- current_user_only = true
-  AND pg_get_userbyid(c.relowner) = current_user;
+SELECT b.grantee,
+  b.owner,
+  b.table_name,
+  b.column_name,
+  b.grantor,
+  b.privilege,
+  b.grantable,
+  b.common,
+  b.inherited
+FROM col_privs_base(false, true, false) AS b;
 -- 权限：与 Oracle 行为对齐
 -- dba_all_tables：默认仅拥有者（超级用户）可见，不授予 PUBLIC
 -- all_all_tables/user_all_tables：授予 PUBLIC

@@ -234,15 +234,16 @@ cd /home/dn/github/postgres/src/test/regress
 - **USER_COL_PRIVS**: 当前用户拥有的列权限（不含owner列）
 
 ##### 2. 实现方式
-- 使用 `col_privs_base(include_system_objects, current_user_only, visible_only)` 基础函数
-- 从 `pg_class`, `pg_attribute`, `pg_namespace` 系统表提取列权限信息
-- 模拟列权限信息（PostgreSQL的列权限管理相对简单）
-- 主要展示表结构，实际权限信息需要从pg_class_acl等系统表获取
+- **基础函数**: `col_privs_base(include_system_objects, current_user_only, visible_only)`
+- **参数控制**: 通过三个布尔参数控制数据范围和权限
+- **数据源**: `pg_class` + `pg_attribute` + `pg_namespace` 系统表
+- **权限控制**: 通过基础函数的内部逻辑实现DBA级别访问控制
+- **类型安全**: 所有返回值显式转换为 `text` 类型，确保类型一致性
 
 ##### 3. 权限模型
-- **DBA_COL_PRIVS**: 不授予 PUBLIC（仅超级用户可见）
-- **ALL_COL_PRIVS**: 授予 PUBLIC（所有用户可见）
-- **USER_COL_PRIVS**: 授予 PUBLIC（所有用户可见）
+- **DBA_COL_PRIVS**: `col_privs_base(true, false, false)` - 需要超级用户权限
+- **ALL_COL_PRIVS**: `col_privs_base(true, false, true)` - 公开访问
+- **USER_COL_PRIVS**: `col_privs_base(false, true, false)` - 当前用户数据
 
 ##### 4. 数据来源
 - `pg_class`: 表定义信息
@@ -256,13 +257,28 @@ cd /home/dn/github/postgres/src/test/regress
 - 支持表、分区表
 
 ##### 6. 列映射表（9列）
+
+**DBA_COL_PRIVS 和 USER_COL_PRIVS 视图结构：**
 | 序 | Oracle 含义 | 列名 | 类型 | 来源/规则 | 说明 |
 |----|-------------|------|------|-----------|------|
 | 1 | 被授权者 | grantee | text | `'PUBLIC'` | 模拟权限信息 |
-| 2 | 所有者 | owner | text | `pg_get_userbyid(c.relowner)` | 仅DBA/USER视图 |
+| 2 | 所有者 | owner | text | `pg_get_userbyid(c.relowner)` | 表所有者 |
 | 3 | 表名 | table_name | text | `c.relname` | 表名 |
 | 4 | 列名 | column_name | text | `a.attname` | 列名 |
 | 5 | 授权者 | grantor | text | `pg_get_userbyid(c.relowner)` | 表所有者 |
+| 6 | 权限 | privilege | text | `'SELECT'` | 模拟权限 |
+| 7 | 可授权 | grantable | text | `'NO'` | 模拟权限 |
+| 8 | 公共 | common | text | `'NO'` | 模拟权限 |
+| 9 | 继承 | inherited | text | `'NO'` | 模拟权限 |
+
+**ALL_COL_PRIVS 视图结构（与Oracle完全匹配）：**
+| 序 | Oracle 含义 | 列名 | 类型 | 来源/规则 | 说明 |
+|----|-------------|------|------|-----------|------|
+| 1 | 授权者 | grantor | text | `pg_get_userbyid(c.relowner)` | 表所有者 |
+| 2 | 被授权者 | grantee | text | `'PUBLIC'` | 模拟权限信息 |
+| 3 | 表模式 | table_schema | name | `n.nspname` | 模式名 |
+| 4 | 表名 | table_name | text | `c.relname` | 表名 |
+| 5 | 列名 | column_name | text | `a.attname` | 列名 |
 | 6 | 权限 | privilege | text | `'SELECT'` | 模拟权限 |
 | 7 | 可授权 | grantable | text | `'NO'` | 模拟权限 |
 | 8 | 公共 | common | text | `'NO'` | 模拟权限 |
@@ -272,6 +288,9 @@ cd /home/dn/github/postgres/src/test/regress
 - PostgreSQL的列权限管理相对简单，这里主要展示表结构
 - 实际权限信息需要从pg_class_acl等系统表获取
 - 当前实现为模拟权限信息，用于兼容性测试
+- **ALL_COL_PRIVS** 视图包含 `table_schema` 列，与Oracle结构完全匹配
+- **DBA_COL_PRIVS** 和 **USER_COL_PRIVS** 视图不包含 `table_schema` 列
+- 所有视图都通过 `col_privs_base` 基础函数实现，确保数据一致性
 
 #### 新增：列注释视图设计 (COL_COMMENTS)
 
