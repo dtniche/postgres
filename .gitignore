@@ -43,3 +43,8 @@ lib*.pc
 /Release/
 /tmp_install/
 /portlock/
+__pycache__/
+**/__pycache__/
+src/test/compact/**/*.txt
+src/test/compact/**/*.log
+src/test/compact/**/*.json

@@ -18,6 +18,9 @@ views:
   - dba_col_comments
   - all_col_comments
   - user_col_comments
+  - dba_constraints
+  - all_constraints
+  - user_constraints
 
 # PostgreSQL数据库连接配置
 postgresql:
