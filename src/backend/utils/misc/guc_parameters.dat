@@ -203,6 +203,13 @@
   boot_val => 'true',
 },
 
+{ name => 'enable_inequality_transitivity', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
+  short_desc => 'Enables the inequality transitivity optimization.',
+  flags => 'GUC_EXPLAIN',
+  variable => 'enable_inequality_transitivity',
+  boot_val => 'true',
+},
+
 { name => 'geqo', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_GEQO',
   short_desc => 'Enables genetic query optimization.',
   long_desc => 'This algorithm attempts to do planning without exhaustive searching.',

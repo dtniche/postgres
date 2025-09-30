@@ -9,3 +9,8 @@ sqlplus -s "$ORACLE_CONN" @src/test/optimize/oracle_or_expand_then_unnest.sql | 
 echo "Done. Review the DBMS_XPLAN outputs above."
 
 
+
+
+
+
+

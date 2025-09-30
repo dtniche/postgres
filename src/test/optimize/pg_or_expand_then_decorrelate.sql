@@ -86,3 +86,8 @@ WHERE tt2.c1 IS NOT NULL OR tt3.c2 IS NOT NULL;
 \echo '=== 完成：请对比三段计划的 Join/聚合形态与耗时 ==='
 
 
+
+
+
+
+

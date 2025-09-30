@@ -66,8 +66,8 @@ SET SERVEROUTPUT ON
 PROMPT === 测试 1: 原始查询执行计划 ===
 SET AUTOTRACE ON EXPLAIN STATISTICS
 
-SELECT * FROM test_t1 WHERE
-EXISTS (SELECT 1 FROM test_t2 WHERE test_t1.a = test_t2.a OR test_t1.b = test_t2.b);
+select count(*) from (SELECT * FROM test_t1 WHERE
+EXISTS (SELECT 1 FROM test_t2 WHERE test_t1.a = test_t2.a OR test_t1.b = test_t2.b)) t;
 
 SET AUTOTRACE OFF
 

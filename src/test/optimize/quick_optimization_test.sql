@@ -58,6 +58,22 @@ EXISTS (SELECT 1 FROM t2 WHERE t1.a = t2.a)
 OR
 EXISTS (SELECT 1 FROM t2 WHERE t1.b = t2.b);
 
+
+SELECT * FROM t1 WHERE
+EXISTS (SELECT 1 FROM t2 WHERE t1.a = t2.a)
+UNION
+select * from t1 where
+EXISTS (SELECT 1 FROM t2 WHERE t1.b = t2.b);
+
+select distinct * from (
+SELECT * FROM t1 WHERE
+EXISTS (SELECT 1 FROM t2 WHERE t1.a = t2.a)
+UNION ALL
+select * from t1 where
+EXISTS (SELECT 1 FROM t2 WHERE t1.b = t2.b)
+)t;
+
+
 -- 测试 3: 进一步优化 (使用 UNION)
 \echo '=== 测试 3: UNION 优化执行计划 ==='
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)

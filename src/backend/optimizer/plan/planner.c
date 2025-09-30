@@ -69,6 +69,7 @@ double		cursor_tuple_fraction = DEFAULT_CURSOR_TUPLE_FRACTION;
 int			debug_parallel_query = DEBUG_PARALLEL_OFF;
 bool		parallel_leader_participation = true;
 bool		enable_distinct_reordering = true;
+bool		enable_inequality_transitivity = true;
 
 /* Hook for plugins to get control in planner() */
 planner_hook_type planner_hook = NULL;

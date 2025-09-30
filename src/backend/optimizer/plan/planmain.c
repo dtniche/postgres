@@ -204,6 +204,9 @@ query_planner(PlannerInfo *root,
 	 */
 	generate_base_implied_equalities(root);
 
+	if (enable_inequality_transitivity)
+		generate_base_implied_inequalities(root);
+
 	/*
 	 * We have completed merging equivalence sets, so it's now possible to
 	 * generate pathkeys in canonical form; so compute query_pathkeys and
