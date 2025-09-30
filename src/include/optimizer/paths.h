@@ -16,6 +16,13 @@
 
 #include "nodes/pathnodes.h"
 
+/*
+ * Experimental: inequality transitivity driver. Implemented in
+ * src/backend/optimizer/path/inequivclass.c
+ */
+struct PlannerInfo; /* forward */
+extern void pg_derive_and_apply_inequality_transitivity(struct PlannerInfo *root);
+
 
 /*
  * allpaths.c

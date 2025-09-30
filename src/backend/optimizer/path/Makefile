@@ -17,6 +17,7 @@ OBJS = \
 	clausesel.o \
 	costsize.o \
 	equivclass.o \
+	inequivclass.o \
 	indxpath.o \
 	joinpath.o \
 	joinrels.o \

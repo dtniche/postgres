@@ -204,6 +204,14 @@ query_planner(PlannerInfo *root,
 	 */
 	generate_base_implied_equalities(root);
 
+	/*
+	 * After EC-based equalities are generated, attempt inequality-transitivity
+	 * derivation to push additional var op Const restrictions to base rels.
+	 * Guarded by GUC enable_inequality_transitivity.
+	 */
+	if (enable_inequality_transitivity)
+		pg_derive_and_apply_inequality_transitivity(root);
+
 	if (enable_inequality_transitivity)
 		generate_base_implied_inequalities(root);
 
